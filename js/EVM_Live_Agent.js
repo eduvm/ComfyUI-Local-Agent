@@ -794,7 +794,7 @@ async function executeAction(action, aliasMap) {
         }
 
         case "reload_bridge": {
-            const mod = await import(`/extensions/ComfyUI-EVM-Live-Agent/EVM_Live_Agent.js?t=${Date.now()}`);
+            const mod = await import(`/extensions/ComfyUI-Local-Agent/EVM_Live_Agent.js?t=${Date.now()}`);
             return { ok: true, reloaded: !!mod };
         }
 

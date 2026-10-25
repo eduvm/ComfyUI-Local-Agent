@@ -1,9 +1,9 @@
 """
-ComfyUI-EVM-Live-Agent
+ComfyUI-Local-Agent
 Ponte bidirecional ao vivo (HTTP + WebSocket do PromptServer) para permitir que
-agentes de IA locais (Antigravity, Hermes, Codex, DSH, OpenCode) inspecionem,
-criem, conectem, configurem, agrupem (EVM Group) e animem nós diretamente no
-canvas aberto do navegador do ComfyUI em tempo real.
+agentes de IA locais (Claude Code, Codex, Cursor, Antigravity, Hermes, DSH, OpenCode)
+inspecionem, criem, conectem, configurem, agrupem (EVM Group) e animem nós diretamente
+no canvas aberto do navegador do ComfyUI em tempo real — sem depender de Comfy Cloud.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ async def evm_live_ping(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "ok": True,
-            "extension": "ComfyUI-EVM-Live-Agent",
+            "extension": "ComfyUI-Local-Agent",
             "version": "1.0.0",
             "clients": fresh_clients,
             "live_pong": live_pong,
