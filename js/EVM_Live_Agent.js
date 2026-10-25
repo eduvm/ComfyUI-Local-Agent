@@ -199,8 +199,8 @@ function serializeNodeSummary(n) {
         id: n.id,
         type: n.type,
         title: n.title || n.type,
-        pos: Array.isArray(n.pos) || ArrayBuffer.isView(n.pos) ? [Math.round(n.pos[0]), Math.round(n.pos[1])] : [0, 0],
-        size: Array.isArray(n.size) || ArrayBuffer.isView(n.size) ? [Math.round(n.size[0]), Math.round(n.size[1])] : [0, 0],
+        pos: n.pos ? [Math.round(Number(n.pos[0] || 0)), Math.round(Number(n.pos[1] || 0))] : [0, 0],
+        size: n.size ? [Math.round(Number(n.size[0] || 0)), Math.round(Number(n.size[1] || 0))] : [0, 0],
         mode: n.mode ?? 0,
         collapsed: !!(n.flags && n.flags.collapsed),
         color: n.color || null,
@@ -209,6 +209,48 @@ function serializeNodeSummary(n) {
         inputs,
         outputs,
     };
+}
+
+function isVueNodes() {
+    return !!(window.LiteGraph && window.LiteGraph.vueNodesMode);
+}
+
+function setNodePos(node, x, y) {
+    if (!node) return;
+    const sx = snap(x);
+    const sy = snap(y);
+    if (isVueNodes()) {
+        node.pos = [sx, sy];
+    } else if (node.pos) {
+        node.pos[0] = sx;
+        node.pos[1] = sy;
+    } else {
+        node.pos = [sx, sy];
+    }
+}
+
+function setNodeSize(node, w, h) {
+    if (!node) return;
+    const sw = snap(w);
+    const sh = snap(h);
+    if (typeof node.setSize === "function") {
+        try {
+            node.setSize([sw, sh]);
+        } catch (_e) {}
+    }
+    if (isVueNodes()) {
+        node.size = [sw, sh];
+    } else if (node.size) {
+        node.size[0] = sw;
+        node.size[1] = sh;
+    } else {
+        node.size = [sw, sh];
+    }
+    node._evmPrevW = Math.round(sw);
+    node._evmPrevBodyH = Math.round(sh);
+    try {
+        node.onResize?.(node.size);
+    } catch (_e) {}
 }
 
 function setNodeWidgetValue(node, widgetKey, newValue) {
@@ -422,22 +464,22 @@ async function executeAction(action, aliasMap) {
             if (action.title) {
                 node.title = String(action.title);
             }
+            g.add(node);
+
             if (Array.isArray(action.pos) && action.pos.length >= 2) {
-                node.pos = [snap(action.pos[0]), snap(action.pos[1])];
+                setNodePos(node, action.pos[0], action.pos[1]);
             } else if (c?.ds) {
                 const el = c.canvas;
                 const cx = (el ? el.clientWidth / 2 : 600) / c.ds.scale - c.ds.offset[0];
                 const cy = (el ? el.clientHeight / 2 : 400) / c.ds.scale - c.ds.offset[1];
-                node.pos = [snap(cx), snap(cy)];
+                setNodePos(node, cx, cy);
             }
             if (Array.isArray(action.size) && action.size.length >= 2) {
-                node.size = [snap(action.size[0]), snap(action.size[1])];
+                setNodeSize(node, action.size[0], action.size[1]);
             }
             if (action.color) node.color = action.color;
             if (action.bgcolor) node.bgcolor = action.bgcolor;
             if (action.mode !== undefined) node.mode = Number(action.mode);
-
-            g.add(node);
 
             if (action.alias || action.id_alias || action.ref) {
                 const alias = String(action.alias || action.id_alias || action.ref).replace(/^\$/, "");
@@ -556,10 +598,10 @@ async function executeAction(action, aliasMap) {
             const node = resolveNode(action.node ?? action.id, aliasMap, g);
             if (!node) return { ok: false, error: `Nó não encontrado: ${action.node ?? action.id}` };
             if (Array.isArray(action.pos) && action.pos.length >= 2) {
-                node.pos = [snap(action.pos[0]), snap(action.pos[1])];
+                setNodePos(node, action.pos[0], action.pos[1]);
             }
             if (Array.isArray(action.size) && action.size.length >= 2) {
-                node.size = [snap(action.size[0]), snap(action.size[1])];
+                setNodeSize(node, action.size[0], action.size[1]);
             }
             if (action.title !== undefined) node.title = String(action.title);
             if (action.color !== undefined) node.color = action.color;
@@ -667,6 +709,19 @@ async function executeAction(action, aliasMap) {
             const ms = Math.max(0, Math.min(10000, Number(action.ms || action.duration || 400)));
             await new Promise((r) => setTimeout(r, ms));
             return { ok: true, waited_ms: ms };
+        }
+
+        case "reload_bridge": {
+            const mod = await import(`/extensions/ComfyUI-EVM-Live-Agent/EVM_Live_Agent.js?t=${Date.now()}`);
+            return { ok: true, reloaded: !!mod };
+        }
+
+        case "eval": {
+            if (!action.code) return { ok: false, error: "eval requer 'code'" };
+            const fn = new Function("app", "api", "graph", "canvas", "LiteGraph", action.code);
+            const val = await fn(app, api, g, c, window.LiteGraph);
+            repaint();
+            return { ok: true, result: val ?? null };
         }
 
         default:
@@ -800,6 +855,12 @@ app.registerExtension({
     name: "EVM.LiveCanvasAgent",
     async setup() {
         installCanvasPulseRenderer();
+        if (window.__evmLiveAgentHandler) {
+            try {
+                api.removeEventListener("evm.live.request", window.__evmLiveAgentHandler);
+            } catch (_e) {}
+        }
+        window.__evmLiveAgentHandler = handleLiveRequest;
         api.addEventListener("evm.live.request", handleLiveRequest);
 
         window.EVMLiveAgent = {
@@ -809,7 +870,8 @@ app.registerExtension({
         };
 
         await sendHeartbeat();
-        setInterval(sendHeartbeat, 25000);
+        if (window.__evmLiveHeartbeatTimer) clearInterval(window.__evmLiveHeartbeatTimer);
+        window.__evmLiveHeartbeatTimer = setInterval(sendHeartbeat, 25000);
         console.log(`[ComfyUI-EVM-Live-Agent] Ponte ao vivo ativa (${TAB_ID}).`);
     },
 });
