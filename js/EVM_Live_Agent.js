@@ -689,9 +689,24 @@ async function executeAction(action, aliasMap) {
                 return { ok: false, error: "EVMGroupSetGet.organizeWorkflow não está disponível" };
             }
             window.EVMGroupSetGet.organizeWorkflow();
-            showAgentToast("Workflow organizado em EVM Groups!", "⚡ EVM Live Agent", 4000);
+            if (window.EVMColorPalette?.autoColorWorkflow) {
+                try {
+                    window.EVMColorPalette.autoColorWorkflow();
+                } catch (_e) {}
+            }
+            showAgentToast("Workflow organizado e colorido em EVM Groups!", "⚡ EVM Live Agent", 4000);
             repaint();
             return { ok: true };
+        }
+
+        case "auto_color": {
+            if (window.EVMColorPalette?.autoColorWorkflow) {
+                window.EVMColorPalette.autoColorWorkflow();
+                showAgentToast("Cores atualizadas no padrão Dj Edu!", "⚡ EVM Live Agent", 3500);
+                repaint();
+                return { ok: true };
+            }
+            return { ok: false, error: "window.EVMColorPalette.autoColorWorkflow não disponível" };
         }
 
         case "load_graph": {
