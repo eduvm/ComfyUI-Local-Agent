@@ -317,10 +317,54 @@ function resolveSlotIndex(list, slotSpec) {
     return idx;
 }
 
-function centerCameraOnNodes(nodes, zoom = null) {
+function centerCameraOnBounds(minX, minY, maxX, maxY, zoom = null, padding = 100) {
     const c = getCanvas();
-    if (!c || !c.ds || !Array.isArray(nodes) || nodes.length === 0) return;
+    if (!c || !c.ds || !Number.isFinite(minX) || !Number.isFinite(minY)) return;
 
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const el = c.canvas;
+    const viewW = el ? el.clientWidth || el.width : 1280;
+    const viewH = el ? el.clientHeight || el.height : 720;
+
+    if (zoom !== null && Number.isFinite(Number(zoom))) {
+        c.ds.scale = Math.max(0.15, Math.min(2.5, Number(zoom)));
+    } else {
+        const spanW = Math.max(200, (maxX - minX) + padding * 2);
+        const spanH = Math.max(200, (maxY - minY) + padding * 2);
+        const fitScale = Math.min(viewW / spanW, viewH / spanH);
+        c.ds.scale = Math.max(0.25, Math.min(1.6, fitScale));
+    }
+
+    c.ds.offset[0] = viewW / (2 * c.ds.scale) - cx;
+    c.ds.offset[1] = viewH / (2 * c.ds.scale) - cy;
+    repaint();
+}
+
+function resolveEvmGroup(ref, graph) {
+    const g = graph || getGraph();
+    const list = g?.extra?.evmGroups || [];
+    if (!ref || !Array.isArray(list) || list.length === 0) return null;
+    const s = String(ref).trim().toLowerCase();
+    return (
+        list.find((grp) => String(grp.id || "").toLowerCase() === s) ||
+        list.find((grp) => String(grp.title || "").toLowerCase() === s) ||
+        list.find((grp) => String(grp.title || "").toLowerCase().includes(s)) ||
+        null
+    );
+}
+
+function getGroupBounds(grp) {
+    if (!grp) return null;
+    const x = Number(grp.x ?? grp.pos?.[0] ?? 0);
+    const y = Number(grp.y ?? grp.pos?.[1] ?? 0);
+    const w = Number(grp.w ?? grp.size?.[0] ?? 400);
+    const h = Number(grp.h ?? grp.size?.[1] ?? 300);
+    return { minX: x, minY: y, maxX: x + w, maxY: y + h, x, y, w, h };
+}
+
+function centerCameraOnNodes(nodes, zoom = null, padding = 120) {
+    if (!Array.isArray(nodes) || nodes.length === 0) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of nodes) {
         if (!n) continue;
@@ -333,26 +377,7 @@ function centerCameraOnNodes(nodes, zoom = null) {
         if (x + w > maxX) maxX = x + w;
         if (y + h > maxY) maxY = y + h;
     }
-    if (!Number.isFinite(minX)) return;
-
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const el = c.canvas;
-    const viewW = el ? el.clientWidth || el.width : 1280;
-    const viewH = el ? el.clientHeight || el.height : 720;
-
-    if (zoom !== null && Number.isFinite(Number(zoom))) {
-        c.ds.scale = Math.max(0.15, Math.min(2.5, Number(zoom)));
-    } else {
-        const spanW = Math.max(400, (maxX - minX) + 240);
-        const spanH = Math.max(300, (maxY - minY) + 240);
-        const fitScale = Math.min(viewW / spanW, viewH / spanH);
-        c.ds.scale = Math.max(0.35, Math.min(1.15, fitScale));
-    }
-
-    c.ds.offset[0] = viewW / (2 * c.ds.scale) - cx;
-    c.ds.offset[1] = viewH / (2 * c.ds.scale) - cy;
-    repaint();
+    centerCameraOnBounds(minX, minY, maxX, maxY, zoom, padding);
 }
 
 // ── Executor de Operações no Canvas ─────────────────────────────────────────
@@ -379,15 +404,16 @@ async function executeAction(action, aliasMap) {
             const evmGroups = (g?.extra?.evmGroups || []).map((grp) => ({
                 id: grp.id,
                 title: grp.title,
-                pos: grp.pos,
-                size: grp.size,
+                x: grp.x ?? grp.pos?.[0] ?? 0,
+                y: grp.y ?? grp.pos?.[1] ?? 0,
+                w: grp.w ?? grp.size?.[0] ?? 0,
+                h: grp.h ?? grp.size?.[1] ?? 0,
                 color: grp.color,
                 folded: !!grp.folded,
-                leftOpen: grp.leftOpen !== false,
-                rightOpen: grp.rightOpen !== false,
-                nodeIds: grp.nodeIds || [],
-                leftNodeIds: grp.leftNodeIds || [],
-                rightNodeIds: grp.rightNodeIds || [],
+                leftRailOpen: grp.leftRailOpen !== false,
+                rightRailOpen: grp.rightRailOpen !== false,
+                getNodeIds: grp.getNodeIds || grp.leftNodeIds || [],
+                setNodeIds: grp.setNodeIds || grp.rightNodeIds || [],
             }));
             const nativeGroups = (g?._groups || []).map((grp, idx) => ({
                 index: idx,
@@ -633,17 +659,58 @@ async function executeAction(action, aliasMap) {
             return { ok: true, selected_ids: nodes.map((n) => n.id) };
         }
 
+        case "focus_group":
         case "focus":
         case "camera": {
+            const padding = Number(action.padding ?? 80);
+            if (action.group || action.groups || op === "focus_group") {
+                const refs = Array.isArray(action.groups) ? action.groups : [action.group ?? action.target ?? action.title ?? action.id];
+                const groups = refs.map((r) => resolveEvmGroup(r, g)).filter(Boolean);
+                if (groups.length === 0) {
+                    return { ok: false, error: `EVM Group não encontrado: ${refs.join(", ")}` };
+                }
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const grp of groups) {
+                    const b = getGroupBounds(grp);
+                    if (!b) continue;
+                    if (b.minX < minX) minX = b.minX;
+                    if (b.minY < minY) minY = b.minY;
+                    if (b.maxX > maxX) maxX = b.maxX;
+                    if (b.maxY > maxY) maxY = b.maxY;
+                }
+                centerCameraOnBounds(minX, minY, maxX, maxY, action.zoom ?? null, padding);
+                showAgentToast(`Foco no grupo: ${groups.map((x) => x.title).join(", ")}`);
+                return { ok: true, focused_groups: groups.map((x) => ({ id: x.id, title: x.title })) };
+            }
+            if (action.rect && Array.isArray(action.rect) && action.rect.length >= 4) {
+                const [rx, ry, rw, rh] = action.rect.map(Number);
+                centerCameraOnBounds(rx, ry, rx + rw, ry + rh, action.zoom ?? null, padding);
+                return { ok: true, focused_rect: [rx, ry, rw, rh] };
+            }
             if (action.nodes || action.node) {
                 const refs = Array.isArray(action.nodes) ? action.nodes : [action.node];
                 const nodes = refs.map((r) => resolveNode(r, aliasMap, g)).filter(Boolean);
-                centerCameraOnNodes(nodes, action.zoom ?? null);
+                centerCameraOnNodes(nodes, action.zoom ?? null, padding);
                 return { ok: true, focused_ids: nodes.map((n) => n.id) };
+            }
+            // Se existirem EVM Groups, foca na caixa total dos grupos; caso contrário, nos nós
+            const allGroups = g?.extra?.evmGroups || [];
+            if (allGroups.length > 0) {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const grp of allGroups) {
+                    const b = getGroupBounds(grp);
+                    if (!b) continue;
+                    if (b.minX < minX) minX = b.minX;
+                    if (b.minY < minY) minY = b.minY;
+                    if (b.maxX > maxX) maxX = b.maxX;
+                    if (b.maxY > maxY) maxY = b.maxY;
+                }
+                centerCameraOnBounds(minX, minY, maxX, maxY, action.zoom ?? null, padding);
+                return { ok: true, focused_all_groups: true };
             }
             const allNodes = g?._nodes || [];
             if (allNodes.length > 0) {
-                centerCameraOnNodes(allNodes, action.zoom ?? null);
+                centerCameraOnNodes(allNodes, action.zoom ?? null, padding);
             }
             return { ok: true, focused_all: true };
         }
