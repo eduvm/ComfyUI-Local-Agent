@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-evm-live-agent"
+description = "EVM Live Canvas Bridge for ComfyUI: Real-time bidirectional HTTP + WebSocket bridge allowing external AI agents (Antigravity, Hermes, Codex, DSH) to inspect, create, wire, configure, group, and animate nodes live on the active ComfyUI browser canvas."
+version = "1.0.0"
+license = { text = "MIT" }
+readme = "README.md"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/eduvm/ComfyUI-EVM-Live-Agent"
+
+[tool.comfy]
+PublisherId = "evm"
+DisplayName = "EVM Live Canvas Bridge"
+Icon = ""
